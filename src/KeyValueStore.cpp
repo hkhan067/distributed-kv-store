@@ -11,10 +11,10 @@ bool KeyValueStore::get(const std::string &key, std::string &value) const
 
     if (it == data.end())
     {
-        return true;
+        return false;
     }
     value = it->second;
-    return false;
+    return true;
 }
 
 bool KeyValueStore::remove(const std::string &key)
