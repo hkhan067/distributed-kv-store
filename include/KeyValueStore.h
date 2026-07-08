@@ -10,6 +10,6 @@ private:
 
 public:
     void put(const std::string &key, const std::string &value);
-    bool get(const std::string &key, const std::string &value) const;
+    bool get(const std::string &key, std::string &value) const;
     bool remove(const std::string &key);
 };
