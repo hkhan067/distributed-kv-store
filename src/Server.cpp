@@ -44,7 +44,7 @@ void Server::start()
 
     int listenResult = listen(serverSocket, 10);
 
-    std::cout << "KV server listening on port" << port << "..." << std::endl;
+    std::cout << "KV server listening on port " << port << "..." << std::endl;
 
     while (true)
     {
