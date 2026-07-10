@@ -9,8 +9,9 @@
 #include <unistd.h>
 
 Server::Server(int portNumber)
+    : port(portNumber)
 {
-    port = portNumber;
+    
 }
 
 void Server::start()
