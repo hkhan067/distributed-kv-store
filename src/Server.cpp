@@ -9,9 +9,10 @@
 #include <unistd.h>
 
 Server::Server(int portNumber)
-    : port(portNumber)
+    : port(portNumber),
+      log("data/kv.log")
 {
-    
+    log.load(store);
 }
 
 void Server::start()
@@ -94,6 +95,7 @@ std::string Server::processCommand(const std::string &line)
     if (command.type == CommandType::Put)
     {
         store.put(command.key, command.value);
+        log.appendPut(command.key, command.value);
         return "OK\n";
     }
     else if (command.type == CommandType::Get)
@@ -113,6 +115,7 @@ std::string Server::processCommand(const std::string &line)
     else if (command.type == CommandType::Delete)
     {
         bool removed = store.remove(command.key);
+        log.appendDelete(command.key);
 
         if (removed)
         {

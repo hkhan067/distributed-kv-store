@@ -18,4 +18,5 @@ add_executable(kv_server
     src/Server.cpp
     src/KeyValueStore.cpp
     src/CommandParser.cpp
+    src/PersistenceLog.cpp
 )
