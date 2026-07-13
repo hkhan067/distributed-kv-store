@@ -4,19 +4,6 @@ import time
 HOST = "192.168.4.22"
 PORT = 8080
 NUM_REQUESTS = 10000
-
-
-def send_command(command: str) -> str:
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
-    try:
-        client_socket.connect((HOST, PORT))
-        client_socket.sendall(command.encode("utf-8"))
-        
-        response = client_socket.recv(1024);
-        return response.decode("utf-8").strip()
-    finally:
-        client_socket.close()
     
     
 def run_benchmark(name: str, commands: list[str]) -> None:
