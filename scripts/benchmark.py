@@ -3,14 +3,14 @@ import time
 
 HOST = "192.168.4.22"
 PORT = 8080
-NUM_REQUESTS = 1000
+NUM_REQUESTS = 10000
 
 
 def send_command(command: str) -> str:
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     
     try:
-        client_socket.conect((HOST, PORT))
+        client_socket.connect((HOST, PORT))
         client_socket.sendall(command.encode("utf-8"))
         
         response = client_socket.recv(1024);
@@ -20,14 +20,21 @@ def send_command(command: str) -> str:
     
     
 def run_benchmark(name: str, commands: list[str]) -> None:
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect((HOST, PORT))
     start_time = time.perf_counter()
     
     for command in commands:
-        send_command(command)
-    
+        client_socket.sendall(command.encode("utf-8"))
+        response = client_socket.recv(1024)
+
+        if not response:
+            raise ConnectionError("Server closed the connection.")
     end_time = time.perf_counter()
     
-    total_time = end_time - start_time
+    client_socket.close()
+    
+    total_time = (end_time - start_time) 
     throughput = len(commands) / total_time
     average_latency_ms = (total_time / len(commands)) * 1000
     
