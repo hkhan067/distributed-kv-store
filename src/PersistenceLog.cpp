@@ -20,7 +20,7 @@ void PersistenceLog::appendPut(const std::string &key, const std::string &value)
         return;
     }
 
-    file << "PUT" << key << " " << value << "\n";
+    file << "PUT " << key << " " << value << "\n";
 }
 
 void PersistenceLog::appendDelete(const std::string &key)
@@ -33,7 +33,7 @@ void PersistenceLog::appendDelete(const std::string &key)
         return;
     }
 
-    file << "DELETE" << key << "\n";
+    file << "DELETE " << key << "\n";
 }
 
 void PersistenceLog::load(KeyValueStore &store)

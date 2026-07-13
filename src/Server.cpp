@@ -10,7 +10,7 @@
 
 Server::Server(int portNumber)
     : port(portNumber),
-      log("data/kv.log")
+      log("../data/kv.log")
 {
     log.load(store);
 }
@@ -71,21 +71,23 @@ void Server::start()
 
 void Server::handleClient(int clientSocket)
 {
-    char buffer[1024];
+    while (true)
+    {    char buffer[1024];
 
-    std::memset(buffer, 0, sizeof(buffer));
+        std::memset(buffer, 0, sizeof(buffer));
 
-    ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
+        ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
 
-    if (bytesRead <= 0)
-    {
-        return;
+        if (bytesRead <= 0)
+        {
+            return;
+        }
+
+        std::string request(buffer);
+        std::string response = processCommand(request);
+
+        send(clientSocket, response.c_str(), response.size(), 0);
     }
-
-    std::string request(buffer);
-    std::string response = processCommand(request);
-
-    send(clientSocket, response.c_str(), response.size(), 0);
 }
 
 std::string Server::processCommand(const std::string &line)
