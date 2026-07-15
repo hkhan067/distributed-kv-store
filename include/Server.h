@@ -8,6 +8,7 @@ class Server
 {
 private:
     int port;
+    
     KeyValueStore store;
     CommandParser parser;
     PersistenceLog log;
