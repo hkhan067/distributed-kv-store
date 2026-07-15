@@ -4,11 +4,11 @@ A C++ key-value store project focused on client-server networking, persistence, 
 
 ## Current Project Status
 
-The project is currently at **Level 3**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, and single-client benchmarking are implemented.
+The project has completed **Level 3** and is currently at **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, and single-client benchmarking are implemented.
 
 The server currently handles one client connection at a time. A connected client can send multiple commands over the same persistent connection, but the server does not accept the next client until the current client disconnects or sends `EXIT`.
 
-The next step is **Level 4: multithreaded client handling**, where each connected client will be handled by its own thread and a mutex will protect the shared key-value store and persistence log.
+The current goal is **Level 4: multithreaded client handling**, where each connected client will be handled by its own thread and a mutex will protect the shared key-value store and persistence log.
 
 ## Current Features
 
@@ -94,7 +94,7 @@ GET is faster because it only performs an in-memory lookup. PUT and DELETE also 
 
 These results represent a single-client, sequential, persistent-connection benchmark rather than maximum concurrent throughput.
 
-Concurrent client throughput is not measured yet because multithreaded client handling is planned for Level 4.
+Concurrent client throughput is not measured yet and will be added as part of Level 4.
 
 ## Project Structure
 
@@ -159,7 +159,7 @@ Run the TCP server:
 - Persistent client connections
 - Client-controlled disconnection with `EXIT`
 
-### Level 3 — Persistence and Benchmarking (Current)
+### Level 3 — Persistence and Benchmarking (Completed)
 
 - Append-only persistence log
 - PUT and DELETE logging
@@ -167,7 +167,7 @@ Run the TCP server:
 - Python benchmark using one persistent client connection
 - Sequential throughput and average latency measurements
 
-### Level 4 — Concurrent Clients (Next)
+### Level 4 — Concurrent Clients (Current)
 
 - One client-handling thread per connection
 - Multiple simultaneous persistent clients
