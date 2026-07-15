@@ -84,15 +84,29 @@ void Server::handleClient(int clientSocket)
         }
 
         std::string request(buffer);
-        std::string response = processCommand(request);
+
+        bool shouldClose = false;
+        std::string response = processCommand(request, shouldClose);
 
         send(clientSocket, response.c_str(), response.size(), 0);
+
+        if (shouldClose)
+        {
+            return;
+        }
     }
 }
 
-std::string Server::processCommand(const std::string &line)
+std::string Server::processCommand(const std::string &line, bool &shouldClose)
 {
+    shouldClose = false;
     Command command = parser.parse(line);
+
+    if (command.type == CommandType::Exit)
+    {
+        shouldClose = true;
+        return "GOODBYE\n";
+    }
 
     if (command.type == CommandType::Put)
     {

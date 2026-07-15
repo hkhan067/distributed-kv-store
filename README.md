@@ -2,6 +2,14 @@
 
 A C++ key-value store project focused on client-server networking, persistence, benchmarking, and distributed systems concepts.
 
+## Current Project Status
+
+The project is currently at **Level 3**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, and single-client benchmarking are implemented.
+
+The server currently handles one client connection at a time. A connected client can send multiple commands over the same persistent connection, but the server does not accept the next client until the current client disconnects or sends `EXIT`.
+
+The next step is **Level 4: multithreaded client handling**, where each connected client will be handled by its own thread and a mutex will protect the shared key-value store and persistence log.
+
 ## Current Features
 
 - PUT, GET, and DELETE operations
@@ -11,6 +19,7 @@ A C++ key-value store project focused on client-server networking, persistence, 
 - Persistent TCP client connections
 - Append-only persistence logging
 - Recovery from the persistence log on server startup
+- Graceful client disconnection with `EXIT`
 - Python benchmarking for throughput and average latency
 
 ## Supported Commands
@@ -33,7 +42,11 @@ DELETE name
 OK
 GET name
 NOT_FOUND
+EXIT
+GOODBYE
 ```
+
+`EXIT` closes only the current client connection. It does not stop the server.
 
 ## Persistence Log
 
@@ -80,6 +93,8 @@ Measured on localhost using one persistent client connection and 10,000 sequenti
 GET is faster because it only performs an in-memory lookup. PUT and DELETE also append entries to the persistence log.
 
 These results represent a single-client, sequential, persistent-connection benchmark rather than maximum concurrent throughput.
+
+Concurrent client throughput is not measured yet because multithreaded client handling is planned for Level 4.
 
 ## Project Structure
 
@@ -130,13 +145,45 @@ Run the TCP server:
 
 ## Development Roadmap
 
-1. Local in-memory key-value store
-2. Command parser
-3. TCP server
-4. Persistent client connections
-5. Append-only persistence log
-6. Recovery on server startup
-7. Benchmarking
-8. Multithreaded client handling
-9. Log compaction
-10. Basic hash-based sharding across multiple nodes
+### Level 1 — Local Key-Value Engine (Completed)
+
+- In-memory storage using `std::unordered_map`
+- PUT, GET, and DELETE operations
+- Command parser
+- Local command-line interface
+
+### Level 2 — TCP Networking (Completed)
+
+- POSIX TCP server
+- Client-server request and response handling
+- Persistent client connections
+- Client-controlled disconnection with `EXIT`
+
+### Level 3 — Persistence and Benchmarking (Current)
+
+- Append-only persistence log
+- PUT and DELETE logging
+- Recovery on startup by replaying the log
+- Python benchmark using one persistent client connection
+- Sequential throughput and average latency measurements
+
+### Level 4 — Concurrent Clients (Next)
+
+- One client-handling thread per connection
+- Multiple simultaneous persistent clients
+- Mutex protection for the shared store and persistence log
+- Concurrent correctness tests
+- Multi-client benchmarking
+
+### Level 5 — Compaction and Durability
+
+- Log compaction to remove obsolete entries
+- Safe temporary-file replacement
+- Stronger log-write error handling
+- Explicit flush and durability behavior
+
+### Level 6 — Basic Distribution
+
+- Multiple key-value server nodes
+- Hash-based key sharding
+- Simple replication as a possible extension

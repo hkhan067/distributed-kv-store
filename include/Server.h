@@ -14,7 +14,7 @@ private:
     PersistenceLog log;
 
     void handleClient(int clientSocket);
-    std::string processCommand(const std::string &line);
+    std::string processCommand(const std::string &line, bool &shouldClose);
 public:
     Server(int portNumber);
     void start();
