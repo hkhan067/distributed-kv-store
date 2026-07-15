@@ -6,9 +6,9 @@ A C++ key-value store project focused on client-server networking, persistence, 
 
 The project has completed **Level 3** and is currently at **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, and single-client benchmarking are implemented.
 
-The server currently handles one client connection at a time. A connected client can send multiple commands over the same persistent connection, but the server does not accept the next client until the current client disconnects or sends `EXIT`.
+The server now accepts multiple simultaneous client connections. Each accepted connection is assigned to a detached client thread, allowing the main server thread to immediately return to accepting more clients. Each client thread keeps its connection open for multiple commands until the client disconnects or sends `EXIT`.
 
-The current goal is **Level 4: multithreaded client handling**, where each connected client will be handled by its own thread and a mutex will protect the shared key-value store and persistence log.
+All client threads share one key-value store and one persistence log. A mutex protects GET, PUT, and DELETE operations so concurrent clients cannot corrupt the shared state or produce persistence-log ordering problems. Concurrent correctness testing and multi-client benchmarking are the remaining Level 4 tasks.
 
 ## Current Features
 
@@ -20,6 +20,9 @@ The current goal is **Level 4: multithreaded client handling**, where each conne
 - Append-only persistence logging
 - Recovery from the persistence log on server startup
 - Graceful client disconnection with `EXIT`
+- Thread-per-client handling for simultaneous connections
+- Mutex protection for the shared store and persistence log
+- Per-client socket ownership and cleanup
 - Python benchmarking for throughput and average latency
 
 ## Supported Commands
@@ -47,6 +50,21 @@ GOODBYE
 ```
 
 `EXIT` closes only the current client connection. It does not stop the server.
+
+## Concurrent Client Handling
+
+The main server thread continuously accepts connections. For each accepted connection, it creates a detached worker thread that runs the persistent `handleClient()` loop for that client. This prevents one connected or idle client from blocking the server from accepting other clients.
+
+Each client thread owns its client socket and closes that socket when the client disconnects, sends `EXIT`, or encounters a read failure. The listening thread remains responsible only for accepting new connections.
+
+The in-memory store and persistence log are shared by every client thread. A single `std::mutex` coordinates access to these resources:
+
+- GET holds the mutex while reading from the store.
+- PUT holds the mutex while updating the store and appending the matching log entry.
+- DELETE holds the mutex while updating the store and appending the matching log entry.
+- Socket reads, command parsing, and response sends happen outside the locked section.
+
+The store mutation and its matching persistence-log append use the same lock so their ordering remains consistent during recovery. CMake uses the portable `Threads::Threads` target to provide the platform-specific thread support required by `kv_server`.
 
 ## Persistence Log
 
@@ -94,7 +112,7 @@ GET is faster because it only performs an in-memory lookup. PUT and DELETE also 
 
 These results represent a single-client, sequential, persistent-connection benchmark rather than maximum concurrent throughput.
 
-Concurrent client throughput is not measured yet and will be added as part of Level 4.
+Concurrent client throughput is not measured yet and will be added as the next part of Level 4. The existing results remain the single-client baseline for comparing future multi-client performance.
 
 ## Project Structure
 
@@ -169,11 +187,12 @@ Run the TCP server:
 
 ### Level 4 — Concurrent Clients (Current)
 
-- One client-handling thread per connection
-- Multiple simultaneous persistent clients
-- Mutex protection for the shared store and persistence log
-- Concurrent correctness tests
-- Multi-client benchmarking
+- One client-handling thread per connection (implemented)
+- Multiple simultaneous persistent clients (implemented)
+- Mutex protection for the shared store and persistence log (implemented)
+- Per-client socket cleanup (implemented)
+- Concurrent correctness tests (next)
+- Multi-client benchmarking (next)
 
 ### Level 5 — Compaction and Durability
 

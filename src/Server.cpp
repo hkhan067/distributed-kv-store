@@ -1,5 +1,6 @@
 #include "Server.h"
 
+#include <thread>
 #include <iostream>
 #include <string>
 #include <cstring>
@@ -53,7 +54,7 @@ void Server::start()
         sockaddr_in clientAddress;
         socklen_t clientAddressSize = sizeof(clientAddress);
 
-        int clientSocket = accept(serverSocket, reinterpret_cast<sockaddr*>(&serverAddress), &clientAddressSize);
+        int clientSocket = accept(serverSocket, reinterpret_cast<sockaddr*>(&clientAddress), &clientAddressSize);
 
         if (clientSocket == -1)
         {
@@ -61,9 +62,13 @@ void Server::start()
             continue;
         }
 
-        handleClient(clientSocket);
-
-        close(clientSocket);
+        std::thread clientThread(
+            &Server::handleClient,
+            this,
+            clientSocket
+        );
+        
+        clientThread.detach();
     }
 
     close(serverSocket);
@@ -80,7 +85,7 @@ void Server::handleClient(int clientSocket)
 
         if (bytesRead <= 0)
         {
-            return;
+            break;
         }
 
         std::string request(buffer);
@@ -92,9 +97,11 @@ void Server::handleClient(int clientSocket)
 
         if (shouldClose)
         {
-            return;
+            break;
         }
     }
+
+    close(clientSocket);
 }
 
 std::string Server::processCommand(const std::string &line, bool &shouldClose)
@@ -110,14 +117,23 @@ std::string Server::processCommand(const std::string &line, bool &shouldClose)
 
     if (command.type == CommandType::Put)
     {
-        store.put(command.key, command.value);
-        log.appendPut(command.key, command.value);
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+
+            store.put(command.key, command.value);
+            log.appendPut(command.key, command.value);
+        }
         return "OK\n";
     }
     else if (command.type == CommandType::Get)
     {
         std::string value;
-        bool found = store.get(command.key, value);
+        bool found = false;
+        
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            found = store.get(command.key, value);
+        }
 
         if (found)
         {
@@ -130,8 +146,14 @@ std::string Server::processCommand(const std::string &line, bool &shouldClose)
     }
     else if (command.type == CommandType::Delete)
     {
-        bool removed = store.remove(command.key);
-        log.appendDelete(command.key);
+        bool removed = false;
+
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+
+            removed = store.remove(command.key);
+            log.appendDelete(command.key);
+        }
 
         if (removed)
         {
