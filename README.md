@@ -4,11 +4,11 @@ A C++ key-value store project focused on client-server networking, persistence, 
 
 ## Current Project Status
 
-The project has completed **Level 3** and is currently at **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, and single-client benchmarking are implemented.
+The project has completed **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, single-client benchmarking, multithreaded client handling, and concurrent benchmarking are implemented. The next planned level is **Level 5: log compaction and stronger durability**.
 
 The server now accepts multiple simultaneous client connections. Each accepted connection is assigned to a detached client thread, allowing the main server thread to immediately return to accepting more clients. Each client thread keeps its connection open for multiple commands until the client disconnects or sends `EXIT`.
 
-All client threads share one key-value store and one persistence log. A mutex protects GET, PUT, and DELETE operations so concurrent clients cannot corrupt the shared state or produce persistence-log ordering problems. Concurrent correctness testing and multi-client benchmarking are the remaining Level 4 tasks.
+All client threads share one key-value store and one persistence log. A mutex protects GET, PUT, and DELETE operations so concurrent clients cannot corrupt the shared state or produce persistence-log ordering problems. Concurrent response validation and restart recovery checks confirm that multiclient operations remain consistent.
 
 ## Current Features
 
@@ -23,7 +23,8 @@ All client threads share one key-value store and one persistence log. A mutex pr
 - Thread-per-client handling for simultaneous connections
 - Mutex protection for the shared store and persistence log
 - Per-client socket ownership and cleanup
-- Python benchmarking for throughput and average latency
+- Python single-client and concurrent benchmarking
+- Average, P50, P95, and P99 latency measurements
 
 ## Supported Commands
 
@@ -81,6 +82,8 @@ When the server starts, it replays the persistence log to rebuild the in-memory 
 
 ## Benchmarking
 
+### Single-Client Sequential Benchmark
+
 The benchmark script uses one persistent TCP client connection and sends requests sequentially. Each request waits for a response before the next request is sent.
 
 This measures single-client, sequential, end-to-end performance over one persistent localhost TCP connection.
@@ -98,7 +101,7 @@ Run the benchmark from the project root in another terminal:
 python3 scripts/benchmark.py
 ```
 
-### Sample Benchmark Results
+#### Sample Benchmark Results
 
 Measured on localhost using one persistent client connection and 10,000 sequential requests per operation:
 
@@ -112,7 +115,40 @@ GET is faster because it only performs an in-memory lookup. PUT and DELETE also 
 
 These results represent a single-client, sequential, persistent-connection benchmark rather than maximum concurrent throughput.
 
-Concurrent client throughput is not measured yet and will be added as the next part of Level 4. The existing results remain the single-client baseline for comparing future multi-client performance.
+### Concurrent Benchmark
+
+The concurrent benchmark creates one Python thread and one persistent TCP connection per simulated client. A barrier waits for all clients to connect, and an event releases them at approximately the same time. Each client sends one request at a time and waits for its response while the other clients operate concurrently.
+
+Each client uses its own key range so throughput measurements do not depend on clients overwriting the same keys. Every server response is checked for correctness. The benchmark reports aggregate throughput along with average, P50, P95, and P99 request latency.
+
+Run the concurrent benchmark from the project root:
+
+```bash
+python3 scripts/concurrent_benchmark.py
+```
+
+#### Sample Concurrent Results
+
+Measured on localhost using 10,000 sequential requests per persistent client connection:
+
+| Clients | Operation | Total Requests | Throughput | Average Latency | P95 Latency |
+|---:|---|---:|---:|---:|---:|
+| 1 | PUT | 10,000 | 24,064 req/s | 0.0409 ms | 0.0640 ms |
+| 1 | GET | 10,000 | 51,738 req/s | 0.0186 ms | 0.0255 ms |
+| 1 | DELETE | 10,000 | 24,806 req/s | 0.0397 ms | 0.0502 ms |
+| 2 | PUT | 20,000 | 41,781 req/s | 0.0472 ms | 0.0660 ms |
+| 2 | GET | 20,000 | 85,601 req/s | 0.0227 ms | 0.0323 ms |
+| 2 | DELETE | 20,000 | 43,491 req/s | 0.0454 ms | 0.0579 ms |
+| 4 | PUT | 40,000 | 44,562 req/s | 0.0888 ms | 0.2258 ms |
+| 4 | GET | 40,000 | 67,772 req/s | 0.0581 ms | 0.1065 ms |
+| 4 | DELETE | 40,000 | 43,513 req/s | 0.0910 ms | 0.2144 ms |
+| 8 | PUT | 80,000 | 43,936 req/s | 0.1799 ms | 0.5787 ms |
+| 8 | GET | 80,000 | 38,645 req/s | 0.2055 ms | 0.4011 ms |
+| 8 | DELETE | 80,000 | 42,676 req/s | 0.1855 ms | 0.5554 ms |
+
+PUT and DELETE throughput improves as the server moves from one client to two and four clients, then levels off because all shared store and log operations use one mutex. At eight clients, increased lock contention raises latency. This is expected for the first correctness-focused concurrency design.
+
+As a recovery check, four clients concurrently wrote 100 keys each. After the server restarted and replayed the persistence log, concurrent GET requests returned all 400 expected values successfully.
 
 ## Project Structure
 
@@ -128,7 +164,8 @@ distributed-kv-store/
 │   ├── PersistenceLog.h
 │   └── Server.h
 ├── scripts/
-│   └── benchmark.py
+│   ├── benchmark.py
+│   └── concurrent_benchmark.py
 └── src/
     ├── CommandParser.cpp
     ├── KeyValueStore.cpp
@@ -185,16 +222,16 @@ Run the TCP server:
 - Python benchmark using one persistent client connection
 - Sequential throughput and average latency measurements
 
-### Level 4 — Concurrent Clients (Current)
+### Level 4 — Concurrent Clients (Completed)
 
 - One client-handling thread per connection (implemented)
 - Multiple simultaneous persistent clients (implemented)
 - Mutex protection for the shared store and persistence log (implemented)
 - Per-client socket cleanup (implemented)
-- Concurrent correctness tests (next)
-- Multi-client benchmarking (next)
+- Concurrent response validation and recovery testing (implemented)
+- Multi-client throughput and latency benchmarking (implemented)
 
-### Level 5 — Compaction and Durability
+### Level 5 — Compaction and Durability (Next)
 
 - Log compaction to remove obsolete entries
 - Safe temporary-file replacement
