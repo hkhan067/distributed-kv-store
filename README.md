@@ -150,6 +150,14 @@ PUT and DELETE throughput improves as the server moves from one client to two an
 
 As a recovery check, four clients concurrently wrote 100 keys each. After the server restarted and replayed the persistence log, concurrent GET requests returned all 400 expected values successfully.
 
+### Persistence-Log Impact
+
+The benchmark results include persistence overhead. Every PUT and DELETE opens and appends to the persistence log before returning a response, while GET performs only an in-memory lookup. This is why write operations are slower than reads.
+
+The log does not currently compact, so overwritten and deleted keys leave obsolete entries behind and the file grows after every write benchmark. The growing log most directly increases disk usage and startup recovery time because the server must replay every historical entry. Depending on the filesystem, storage device, and cache state, a large log can also affect sustained write measurements. Benchmark comparisons should therefore record the log size or begin from a consistent log state.
+
+Level 5 log compaction will rewrite the log to contain only the current key-value state. This should greatly reduce log size and recovery time and make long-running benchmark conditions more consistent. Compaction will not eliminate the normal cost of appending each new PUT or DELETE.
+
 ## Project Structure
 
 ```txt
@@ -234,6 +242,7 @@ Run the TCP server:
 ### Level 5 — Compaction and Durability (Next)
 
 - Log compaction to remove obsolete entries
+- Reduced log size and startup recovery time
 - Safe temporary-file replacement
 - Stronger log-write error handling
 - Explicit flush and durability behavior
