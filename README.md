@@ -1,10 +1,10 @@
-# Distributed Key-Value Store
+# Distributed Key-Value Store (In Progress)
 
-A C++ key-value store project focused on client-server networking, persistence, benchmarking, and distributed systems concepts.
+A C++ key-value store project focused on client-server networking, persistence, concurrency, benchmarking, and distributed systems concepts. The current implementation is a single-node concurrent, persistent key-value store; the distributed portion is planned for a later project level.
 
 ## Current Project Status
 
-The project has completed **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, single-client benchmarking, multithreaded client handling, and concurrent benchmarking are implemented. The next planned level is **Level 5: log compaction and stronger durability**.
+The project has completed **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, single-client benchmarking, multithreaded client handling, and concurrent benchmarking are implemented. The next planned level is **Level 5: log compaction and stronger durability**. Multi-node distribution, hash-based sharding, and optional replication are planned for **Level 6** and are not implemented yet.
 
 The server now accepts multiple simultaneous client connections. Each accepted connection is assigned to a detached client thread, allowing the main server thread to immediately return to accepting more clients. Each client thread keeps its connection open for multiple commands until the client disconnects or sends `EXIT`.
 
@@ -129,22 +129,22 @@ python3 scripts/concurrent_benchmark.py
 
 #### Sample Concurrent Results
 
-Measured on localhost using 10,000 sequential requests per persistent client connection:
+Measured on localhost using 10,000 sequential requests per persistent client connection. The persistence log was cleared before this test suite began, so these results started from an empty log. The log then grew normally as the PUT and DELETE phases ran.
 
-| Clients | Operation | Total Requests | Throughput | Average Latency | P95 Latency |
-|---:|---|---:|---:|---:|---:|
-| 1 | PUT | 10,000 | 24,064 req/s | 0.0409 ms | 0.0640 ms |
-| 1 | GET | 10,000 | 51,738 req/s | 0.0186 ms | 0.0255 ms |
-| 1 | DELETE | 10,000 | 24,806 req/s | 0.0397 ms | 0.0502 ms |
-| 2 | PUT | 20,000 | 41,781 req/s | 0.0472 ms | 0.0660 ms |
-| 2 | GET | 20,000 | 85,601 req/s | 0.0227 ms | 0.0323 ms |
-| 2 | DELETE | 20,000 | 43,491 req/s | 0.0454 ms | 0.0579 ms |
-| 4 | PUT | 40,000 | 44,562 req/s | 0.0888 ms | 0.2258 ms |
-| 4 | GET | 40,000 | 67,772 req/s | 0.0581 ms | 0.1065 ms |
-| 4 | DELETE | 40,000 | 43,513 req/s | 0.0910 ms | 0.2144 ms |
-| 8 | PUT | 80,000 | 43,936 req/s | 0.1799 ms | 0.5787 ms |
-| 8 | GET | 80,000 | 38,645 req/s | 0.2055 ms | 0.4011 ms |
-| 8 | DELETE | 80,000 | 42,676 req/s | 0.1855 ms | 0.5554 ms |
+| Clients | Operation | Total Requests | Total Time | Throughput | Average Latency | P50 Latency | P95 Latency | P99 Latency |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | PUT | 10,000 | 0.4227 s | 23,658.03 req/s | 0.0416 ms | 0.0391 ms | 0.0626 ms | 0.0965 ms |
+| 1 | GET | 10,000 | 0.1974 s | 50,659.21 req/s | 0.0190 ms | 0.0187 ms | 0.0247 ms | 0.0301 ms |
+| 1 | DELETE | 10,000 | 0.4011 s | 24,928.54 req/s | 0.0395 ms | 0.0391 ms | 0.0476 ms | 0.0557 ms |
+| 2 | PUT | 20,000 | 0.4706 s | 42,498.05 req/s | 0.0464 ms | 0.0442 ms | 0.0595 ms | 0.0890 ms |
+| 2 | GET | 20,000 | 0.2214 s | 90,336.24 req/s | 0.0215 ms | 0.0205 ms | 0.0289 ms | 0.0388 ms |
+| 2 | DELETE | 20,000 | 0.4703 s | 42,530.57 req/s | 0.0464 ms | 0.0434 ms | 0.0655 ms | 0.1092 ms |
+| 4 | PUT | 40,000 | 0.9290 s | 43,057.56 req/s | 0.0914 ms | 0.0563 ms | 0.2295 ms | 0.3641 ms |
+| 4 | GET | 40,000 | 0.6052 s | 66,097.77 req/s | 0.0595 ms | 0.0533 ms | 0.1122 ms | 0.1580 ms |
+| 4 | DELETE | 40,000 | 1.0401 s | 38,456.22 req/s | 0.1028 ms | 0.0884 ms | 0.2424 ms | 0.3519 ms |
+| 8 | PUT | 80,000 | 1.8297 s | 43,724.03 req/s | 0.1814 ms | 0.0508 ms | 0.5738 ms | 0.9568 ms |
+| 8 | GET | 80,000 | 2.0779 s | 38,500.91 req/s | 0.2063 ms | 0.1887 ms | 0.4020 ms | 0.5336 ms |
+| 8 | DELETE | 80,000 | 1.8163 s | 44,044.44 req/s | 0.1800 ms | 0.1745 ms | 0.4535 ms | 0.7401 ms |
 
 PUT and DELETE throughput improves as the server moves from one client to two and four clients, then levels off because all shared store and log operations use one mutex. At eight clients, increased lock contention raises latency. This is expected for the first correctness-focused concurrency design.
 
@@ -232,12 +232,12 @@ Run the TCP server:
 
 ### Level 4 — Concurrent Clients (Completed)
 
-- One client-handling thread per connection (implemented)
-- Multiple simultaneous persistent clients (implemented)
-- Mutex protection for the shared store and persistence log (implemented)
-- Per-client socket cleanup (implemented)
-- Concurrent response validation and recovery testing (implemented)
-- Multi-client throughput and latency benchmarking (implemented)
+- One client-handling thread per connection
+- Multiple simultaneous persistent clients
+- Mutex protection for the shared store and persistence log
+- Per-client socket cleanup
+- Concurrent response validation and recovery testing
+- Multi-client throughput and latency benchmarking
 
 ### Level 5 — Compaction and Durability (Next)
 
@@ -247,7 +247,7 @@ Run the TCP server:
 - Stronger log-write error handling
 - Explicit flush and durability behavior
 
-### Level 6 — Basic Distribution
+### Level 6 — Basic Distribution (Planned)
 
 - Multiple key-value server nodes
 - Hash-based key sharding
