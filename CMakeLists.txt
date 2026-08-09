@@ -45,3 +45,18 @@ add_test(
 )
 
 set_tests_properties(level6_integration PROPERTIES TIMEOUT 30)
+
+add_test(
+    NAME distributed_benchmark_smoke
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/scripts/distributed_benchmark.py
+        --server $<TARGET_FILE:kv_server>
+        --trials 1
+        --requests-per-client 5
+        --mixed-requests-per-client 100
+        --history-keys 20
+        --history-versions 2
+)
+
+set_tests_properties(distributed_benchmark_smoke PROPERTIES TIMEOUT 30)
