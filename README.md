@@ -1,12 +1,10 @@
 # Distributed Key-Value Store
 
-An educational distributed key-value store built in C++17 with POSIX TCP sockets, multithreaded client handling, durable append-only logs, safe log compaction, and deterministic client-side sharding across multiple server nodes.
+An educational C++17 key-value store with a multithreaded POSIX TCP server, append-only operation logs, per-node log compaction, and deterministic client-side sharding.
 
 ## Project Status
 
-Levels 1 through 6 are complete. The project progressed from a local `std::unordered_map` storage engine to a concurrent, persistent TCP server and then to a client-sharded multi-node system.
-
-The distributed layer is intentionally small and explainable: each node runs the same C++ server with its own port, in-memory store, mutex, and persistence log. A Python client hashes each key and routes it to one node. Replication, automatic failover, consensus, and automatic rebalancing are future extensions and are not claimed as current features.
+Levels 1 through 6 are complete. The project progresses from a local `std::unordered_map` engine to a concurrent TCP server with persistent client connections and finally to a client-sharded, multi-process system. Here, a node means one independently running `kv_server` process; the examples colocate three nodes on one host.
 
 ## Architecture
 
@@ -23,28 +21,21 @@ The distributed layer is intentionally small and explainable: each node runs the
        node0.log            node1.log            node2.log
 ```
 
-The servers do not communicate with one another. This is client-side sharding: every client must use the same deterministic hash function and the same ordered node list so a key always reaches the same node.
+Each node owns its own in-memory map, mutex, and log. The servers do not communicate or maintain cluster metadata. The Python client owns key placement, so this is client-side partitioning rather than replication or server-coordinated distribution. Every sharding-aware client must use the same hash function and ordered node list.
 
 ## Features
 
-- PUT, GET, DELETE, COMPACT, and EXIT commands
+- PUT, GET, DELETE, COMPACT, and EXIT commands over persistent TCP connections
 - In-memory storage using `std::unordered_map`
-- POSIX TCP server with persistent connections
-- Newline-delimited request and response framing
-- Correct handling of fragmented or batched TCP commands
-- One detached client-handling thread per connection
-- Mutex protection for each node's shared store and persistence log
-- Append-only PUT and DELETE persistence records
-- Startup recovery by replaying each node's log
-- Write-ahead in-memory updates with persistence error reporting
-- `flush()` and POSIX `fsync()` before acknowledging writes
-- Safe log compaction through a temporary file and atomic rename
-- Configurable server port and persistence-log path
-- Deterministic 64-bit FNV-1a client-side key sharding
-- Lazy persistent connection reuse for each contacted node
-- Per-shard error reporting without rerouting data incorrectly
-- Reproducible final-version distributed benchmark suite
-- C++ unit tests and a real three-node Python integration test
+- Newline-delimited framing with fragmented-request buffering and complete-response send loops
+- One detached client thread per connection and one mutex per node for shared store/log state
+- Append-only PUT/DELETE logs with startup replay and log-before-memory mutation ordering
+- Stream flush, close, and POSIX `fsync()` before acknowledging successful writes
+- Per-node compaction through a same-directory temporary file and atomic rename
+- Configurable server ports and persistence-log paths
+- Deterministic 64-bit FNV-1a client-side sharding with lazy persistent connections to contacted nodes
+- Per-shard errors without incorrect fallback routing
+- Reproducible distributed benchmarks, C++ unit tests, and a real three-node integration test
 
 ## Quick Start
 
@@ -143,7 +134,7 @@ Node 2 (127.0.0.1:8082): GOODBYE
 GOODBYE
 ```
 
-PUT, GET, and DELETE contain a key, so the sharded client sends each command to exactly one node. COMPACT has no key, so the client broadcasts it to every node. EXIT closes the client's open connections; it does not stop the server processes.
+PUT, GET, and DELETE contain a key, so the sharded client sends each command to exactly one node. COMPACT has no key, so the client contacts every configured node sequentially and reports each result independently; this fan-out is not an atomic cluster transaction. EXIT closes the client's open connections but does not stop the servers.
 
 Keys and values are currently whitespace-delimited single tokens.
 
@@ -163,29 +154,21 @@ For every key command, the client:
 2. Calculates the key's node index.
 3. Opens that node's TCP connection if it has not been used yet.
 4. Reuses the persistent connection for later requests to that node.
-5. Sends the unchanged command and waits for one newline-terminated response.
+5. Sends the normalized command and waits for one newline-terminated response.
 
 Hash collisions are harmless: they only place multiple keys on the same node. If a node is unavailable, the client reports that shard as unavailable and does not silently send the key to a different node. Requests for healthy shards can continue.
 
-The ordered node list is part of the database configuration. Adding, removing, or reordering nodes changes the modulo result for many keys. This first design does not automatically move existing data.
+The ordered node list is part of the database configuration. Adding or removing nodes changes the modulo result for many keys; reordering the list changes which server address an existing index names. Any of these changes can make stored keys unreachable until data is migrated manually.
 
 ## Concurrency and TCP Handling
 
-The main server thread continuously accepts connections. Each accepted socket is passed to a detached client thread, allowing the listening thread to immediately accept the next client. The client thread keeps its connection open and processes multiple commands until the client disconnects or sends EXIT.
+The main server thread continuously accepts connections. Each accepted socket is passed to a detached client thread, allowing the listener to accept the next client immediately. That thread processes multiple commands until EXIT, disconnect, oversized input, or a socket error closes the connection.
 
-TCP is a byte stream, so one `read()` is not guaranteed to equal one command. Each client thread keeps a pending string, extracts complete newline-delimited commands, and preserves any incomplete command for the next read. A send loop similarly continues until the full response has been written.
+TCP is a byte stream, so one `read()` is not guaranteed to equal one command. Each client thread buffers incomplete input, extracts all complete newline-delimited commands, and preserves the remainder for the next read. A send loop writes the full response. Requests are limited to 8,192 bytes; oversized input receives an error and closes the connection. The Python client reads through the response newline and rejects EOF before a complete response.
 
-Every node has one `std::mutex` protecting its own store and log:
+Every node has one exclusive `std::mutex`. GET holds it for the lookup; PUT, DELETE, and COMPACT hold it through their store/log critical sections. Parsing and socket I/O stay outside the lock, but protected operations—including concurrent GETs—serialize on that node. Different nodes use different mutexes and operate independently.
 
-- GET locks while reading from the store.
-- PUT locks while durably appending its record and then updating memory.
-- DELETE locks while checking the key, durably appending its record, and then updating memory.
-- COMPACT locks while snapshotting the store and safely replacing the log.
-- Socket I/O and command parsing remain outside the data lock.
-
-The simple thread-per-client and single-mutex design prioritizes correctness and readability. Different nodes operate independently, while commands on one node serialize briefly around its shared state.
-
-## Persistence and Durability
+## Persistence and Write Ordering
 
 Each node records write operations in its own append-only log:
 
@@ -194,20 +177,22 @@ PUT name Haroon
 DELETE name
 ```
 
-The node replays that log at startup to rebuild its in-memory state. GET is not logged because it does not modify data. Incomplete PUT or DELETE records are ignored during recovery.
+The node replays the log at startup to rebuild its in-memory state. GET is not logged because it does not modify data. Records missing required tokens are ignored, but the text format has no checksum or length field to identify every torn or corrupted record that still looks syntactically valid.
 
-PUT and DELETE follow write-ahead order:
+The server uses log-before-memory ordering for every PUT and for DELETE when the key exists:
 
 ```txt
 lock shared state
-append and flush the log record
+append the record, flush, and close the stream
 fsync the log file
 change the in-memory store
 unlock shared state
 return OK
 ```
 
-If persistence fails, the server returns `ERROR persistence failure` without changing memory. Per-write `fsync()` provides stronger durability than stream buffering alone, but it also makes writes slower.
+If append, flush, close, or `fsync()` reports failure, the server returns `ERROR persistence failure` without changing the current in-memory map. A late failure is still an ambiguous disk outcome: bytes written before the error are not rolled back and could be replayed after restart.
+
+Completing POSIX `fsync()` before `OK` is stronger than buffered logging alone, but it is not an absolute power-loss guarantee. In particular, the implementation does not `fsync()` the parent directory after first creating a log file.
 
 ### Log Compaction
 
@@ -216,18 +201,18 @@ An append-only log retains overwritten values and deletion history. COMPACT redu
 1. Hold `dataMutex` and copy the current key-value map.
 2. Write one PUT record per live key to `<log-path>.tmp`.
 3. Flush, close, and `fsync()` the temporary file.
-4. Atomically rename the temporary file over the original log.
+4. Rename the same-directory temporary file over the original log, atomically changing the active path for running processes.
 5. `fsync()` the resulting log before returning OK.
 
-The original log is never truncated first. If temporary-file creation or writing fails, the old log remains available for recovery. Holding the mutex through replacement pauses that node's data operations briefly, but prevents an acknowledged concurrent write from being replaced by an older snapshot.
+The original log is never truncated first. Failures before a successful rename leave the original path untouched. After rename, however, a final sync failure returns an error even though replacement has already occurred. The parent directory is not `fsync()`ed after rename, so the project does not claim that the replacement is fully crash- or power-loss-durable. Holding the mutex through the entire operation prevents a concurrent acknowledged write from being omitted by the snapshot.
 
 ## Testing
 
 `ctest` runs three test suites:
 
-- `level5_tests` checks compaction, recovery equivalence, repeated PUTs, deleted keys, post-compaction writes, empty logs, malformed records, and failure paths that preserve the original log.
-- `level6_integration` launches three real server processes on temporary ports with separate temporary logs. It verifies deterministic hashing, physical shard isolation, fragmented and batched TCP commands, PUT/GET/DELETE routing, cluster-wide compaction, unavailable-shard errors, healthy-shard continuity, and recovery after node and full-cluster restarts.
-- `distributed_benchmark_smoke` runs every final benchmark category with a tiny workload to catch orchestration, validation, and reporting regressions without treating smoke-run numbers as performance results.
+- `level5_tests` checks compaction, recovery equivalence, repeated PUTs, deleted keys, post-compaction writes, empty logs, records missing required fields, and pre-replacement failures that preserve the original log.
+- `level6_integration` launches three server processes on temporary ports with separate temporary logs. It verifies deterministic hashing, per-process shard placement, fragmented and batched TCP commands, request routing, client fan-out compaction, unavailable-shard errors, healthy-shard continuity, and recovery after node and full-cluster restarts.
+- `distributed_benchmark_smoke` runs every report category with reduced network and persistence workloads to catch orchestration, validation, and reporting regressions; its output is not treated as a performance result.
 
 Tests never modify `data/kv.log`.
 
@@ -258,12 +243,12 @@ Results were collected on August 9, 2026 using an Apple M5 Pro MacBook Pro with 
 - C++ server compiled in Release mode with Apple Clang 21.0.0.
 - Primary distributed workloads use three real `kv_server` processes with independent temporary logs; the node-scaling test intentionally varies this from one to three.
 - Localhost TCP transport with one persistent connection per worker per node.
-- Connection setup, fixture creation, log resets, and cleanup excluded from timed intervals.
+- For request workloads, connection setup, fixture creation, log resets, and cleanup are excluded from timing; recovery timing intentionally includes process launch and readiness connections.
 - Workers synchronized before timing and every server response checked for correctness.
 - Separate key ranges per worker to avoid accidental cross-client overwrites.
-- Fresh logs before every timed workload trial so old append history cannot bias later rows; recovery trials intentionally restart the same controlled log.
-- Three trials per timed row; each reported metric is the median of those trials.
-- PUT and DELETE include the final Level 5 `flush()` and per-request `fsync()` durability behavior.
+- Each request-workload trial starts with fresh logs; PUT, GET, and DELETE within a scaling trial intentionally share one dataset and log history.
+- Throughput, latency, and recovery values use three-trial medians. The reported COMPACT duration is one observation.
+- PUT and DELETE include stream flush, close, and per-request file `fsync()`.
 
 These are end-to-end, closed-loop measurements: each worker sends one request and waits for its response before sending its next request.
 
@@ -286,18 +271,18 @@ Each worker performs 500 requests per operation. PUT first creates the dataset, 
 | 16 | GET | 8,000 | 38,541 | 0.408 ms | 0.364 ms | 0.878 ms | 1.165 ms |
 | 16 | DELETE | 8,000 | 30,885 | 0.509 ms | 0.462 ms | 1.001 ms | 1.326 ms |
 
-GET peaked at **75,144 requests/second**. Durable PUT and DELETE throughput peaked around **40,000 requests/second** with four clients. At eight and sixteen clients, throughput levels off while tail latency rises, which is consistent with shared-host load generation, storage synchronization, thread scheduling, and per-node mutex contention.
+GET peaked at **75,144 requests/second**. PUT and DELETE, including per-request file `fsync()`, peaked around **40,000 requests/second** with four clients. Throughput then plateaued while tail latency rose; the benchmark did not profile a single cause.
 
 ### Mixed Workloads
 
-Eight concurrent clients each execute 1,000 shuffled operations against three nodes. GET and DELETE fixtures are created before timing.
+Eight concurrent clients each execute 1,000 shuffled operations against three nodes. Fixtures are created before timing; GETs cycle through a hot set of up to 100 keys per worker, while DELETE keys are used once. The node-process comparison below uses the same read-heavy generator.
 
 | Workload | Operation Mix | Requests | Requests/sec | Avg Latency | P50 | P95 | P99 |
 |---|---|---:|---:|---:|---:|---:|---:|
 | Read-heavy | 80% GET / 10% PUT / 10% DELETE | 8,000 | 40,569 | 0.195 ms | 0.180 ms | 0.365 ms | 0.467 ms |
 | Balanced | 50% GET / 25% PUT / 25% DELETE | 8,000 | 36,527 | 0.217 ms | 0.198 ms | 0.404 ms | 0.540 ms |
 
-The read-heavy mix is faster because only 20% of its operations require an append, flush, and `fsync()`. The balanced mix performs durable writes for half of its requests.
+The read-heavy result is consistent with only 20% of its operations requiring append, flush, close, and `fsync()`, compared with 50% for the balanced mix.
 
 ### Node-Process Scaling
 
@@ -309,7 +294,7 @@ This comparison keeps the workload fixed at eight clients and 8,000 read-heavy o
 | 2 | 8,000 | 40,428 | 0.196 ms | 0.181 ms | 0.363 ms | 0.482 ms |
 | 3 | 8,000 | 39,198 | 0.201 ms | 0.182 ms | 0.385 ms | 0.508 ms |
 
-Throughput remains around 39–40K requests/second while all processes, the Python load generator, and all persistence files share one laptop and storage device. The lack of a material gain is consistent with shared-host limits. Sharding distributes ownership and isolates failures, but running more processes on one host does not create additional physical capacity. A multi-machine deployment is required to measure horizontal hardware scaling.
+Throughput remains around 39–40K requests/second while every process, log, and benchmark worker shares one laptop. This same-host comparison shows no material capacity gain and is not evidence of multi-machine horizontal scaling.
 
 ### FNV-1a Shard Balance
 
@@ -325,19 +310,19 @@ The maximum deviation from the ideal 10,000 keys per node is only **0.28%**.
 
 ### Compaction and Recovery
 
-To create a controlled persistence history efficiently, the benchmark generates 315,000 records directly in the valid native log format rather than sending 315,000 network writes: 30,000 keys receive ten PUT versions each, then half of the keys are deleted. It verifies live and deleted sample keys before and after compaction.
+To create a controlled persistence history efficiently, the benchmark generates 315,000 records directly in the server's plain-text log format rather than sending 315,000 network writes: 30,000 keys receive ten PUT versions each, then half of the keys are deleted. It verifies live and deleted sample keys before and after compaction.
 
-| Metric | Before Compaction | After Compaction | Improvement |
+| Metric | Before Compaction | After Compaction | Observed Change |
 |---|---:|---:|---:|
 | Log records | 315,000 | 15,000 | 95.24% reduction |
 | Combined log size | 9.12 MiB | 0.44 MiB | 95.19% reduction |
-| Median cluster-ready recovery | 22.7 ms | 6.0 ms | 73.7% faster |
+| Median cluster-ready recovery | 22.7 ms | 6.0 ms | 73.7% lower |
 
-One observed end-to-end COMPACT run across all three localhost nodes took **0.003 seconds**. Recovery is measured from process launch until every node accepts TCP connections, using the median of three restarts before and three restarts after compaction with a 1 ms readiness-polling interval.
+One observed sequential COMPACT fan-out from the client across all three localhost nodes took **0.003 seconds**. Recovery is measured from process launch until every node accepts TCP connections, using the median of three restarts before and three restarts after compaction with a 1 ms readiness-polling interval.
 
 ### Interpreting the Numbers
 
-- All nodes and benchmark workers run on one machine over loopback, so these are not multi-datacenter or production-network claims.
+- All nodes and benchmark workers run on one machine over loopback, so these are not multi-host or production-network claims.
 - The Python load generator, operating-system cache, scheduler, and shared storage device can limit measured throughput.
 - Recovery measurements include process startup and use warm localhost filesystem caches.
 - Results will vary by CPU, filesystem, storage device, operating system, and background load.
@@ -376,14 +361,15 @@ distributed-kv-store/
 
 This project demonstrates core systems concepts without pretending to be a production database:
 
-- Sharding uses hash modulo node count, not consistent hashing.
-- Changing the node count or order requires manual data migration.
-- Data has one copy; there is no replication or automatic failover.
-- A failed node makes its assigned shard unavailable instead of rerouting keys incorrectly.
+- Sharding uses hash modulo node count, not consistent hashing; membership and node order are configured manually in every client.
+- There is no service discovery, server-side shard map, or automatic data migration when membership changes.
+- Each key is assigned to one server node; there is no replication or automatic failover.
+- A failed shard process makes its keys unavailable without rerouting them, while healthy shard processes remain usable.
+- There are no cross-node transactions or coordinated cluster operations. COMPACT is best-effort per node and can partially succeed.
 - Each server creates one detached thread per client rather than using a bounded thread pool.
-- COMPACT blocks data operations on that node until replacement finishes.
-- Keys and values cannot currently contain whitespace or newlines.
-- There is no authentication, TLS, checksumming, versioning, or distributed consensus.
+- COMPACT holds that node's exclusive mutex and blocks its data operations until replacement finishes.
+- Log records have no checksum or length framing, and a missing or unreadable log is treated as empty during startup.
+- Keys and values cannot contain whitespace or newlines; there is no authentication, TLS, versioning, or consensus protocol.
 
 These are deliberate boundaries that keep the implementation understandable and define clear future work.
 
@@ -411,23 +397,22 @@ These are deliberate boundaries that keep the implementation understandable and 
 - Thread-per-client handling
 - Multiple simultaneous persistent clients
 - Mutex-protected shared state and log
-- Concurrent benchmark and recovery validation
+- Concurrent persistent-client validation
 
 ### Level 5 — Compaction and Durability (Completed)
 
-- Safe log compaction and atomic replacement
-- Write-ahead memory updates
-- Explicit flush, `fsync()`, and error propagation
-- Compaction, recovery, malformed-record, and failure-path tests
+- Temporary-file compaction with atomic rename
+- Log-before-memory mutation ordering with flush/`fsync()` error handling
+- Compaction, recovery, malformed-record, and pre-replacement failure tests
 
 ### Level 6 — Basic Distribution (Completed)
 
 - Configurable independent server nodes and log paths
 - Deterministic FNV-1a client-side sharding
 - Persistent per-node connections
-- Cluster-wide COMPACT handling
+- Client fan-out for independent per-node COMPACT operations
 - Unavailable-shard isolation without incorrect fallback routing
-- Three-node distribution, failure, and recovery integration testing
+- Three-node routing, failure, and recovery integration testing
 
 ### Possible Next Steps
 
