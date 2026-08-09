@@ -1,5 +1,7 @@
 #include "Server.h"
 
+#include <cerrno>
+#include <csignal>
 #include <thread>
 #include <iostream>
 #include <string>
@@ -9,21 +11,23 @@
 #include <netinet/in.h>
 #include <unistd.h>
 
-Server::Server(int portNumber)
+Server::Server(int portNumber, const std::string &logPath)
     : port(portNumber),
-      log("../data/kv.log")
+      log(logPath)
 {
     log.load(store);
 }
 
-void Server::start()
+bool Server::start()
 {
+    std::signal(SIGPIPE, SIG_IGN);
+
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
     if (serverSocket == -1)
     {
         std::cout << "ERROR: Failed to create socket." << std::endl;
-        return;
+        return false;
     }
 
     int option = 1;
@@ -42,7 +46,7 @@ void Server::start()
     {
         std::cout << "ERROR: Failed to bind socket to port." << std::endl;
         close(serverSocket);
-        return;
+        return false;
     }
 
     int listenResult = listen(serverSocket, 10);
@@ -51,7 +55,7 @@ void Server::start()
     {
         std::cout << "ERROR: Failed to listen on socket." << std::endl;
         close(serverSocket);
-        return;
+        return false;
     }
 
     std::cout << "KV server listening on port " << port << "..." << std::endl;
@@ -79,37 +83,97 @@ void Server::start()
     }
 
     close(serverSocket);
+    return true;
 }
 
 void Server::handleClient(int clientSocket)
 {
-    while (true)
+    const std::size_t maxRequestSize = 8192;
+
+    std::string pendingRequest;
+    bool shouldCloseClient = false;
+
+    while (!shouldCloseClient)
     {
         char buffer[1024];
 
-        std::memset(buffer, 0, sizeof(buffer));
-
-        ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer) - 1);
+        ssize_t bytesRead = read(clientSocket, buffer, sizeof(buffer));
 
         if (bytesRead <= 0)
         {
             break;
         }
 
-        std::string request(buffer);
+        pendingRequest.append(buffer, static_cast<std::size_t>(bytesRead));
 
-        bool shouldClose = false;
-        std::string response = processCommand(request, shouldClose);
+        std::size_t newlinePosition = pendingRequest.find('\n');
 
-        send(clientSocket, response.c_str(), response.size(), 0);
-
-        if (shouldClose)
+        while (newlinePosition != std::string::npos)
         {
-            break;
+            if (newlinePosition > maxRequestSize)
+            {
+                sendResponse(clientSocket, "ERROR request too long\n");
+                shouldCloseClient = true;
+                break;
+            }
+
+            std::string request = pendingRequest.substr(0, newlinePosition);
+            pendingRequest.erase(0, newlinePosition + 1);
+
+            if (!request.empty() && request.back() == '\r')
+            {
+                request.pop_back();
+            }
+
+            bool shouldClose = false;
+            std::string response = processCommand(request, shouldClose);
+
+            if (!sendResponse(clientSocket, response) || shouldClose)
+            {
+                shouldCloseClient = true;
+                break;
+            }
+
+            newlinePosition = pendingRequest.find('\n');
+        }
+
+        if (!shouldCloseClient && pendingRequest.size() > maxRequestSize)
+        {
+            sendResponse(clientSocket, "ERROR request too long\n");
+            shouldCloseClient = true;
         }
     }
 
     close(clientSocket);
+}
+
+bool Server::sendResponse(int clientSocket, const std::string &response)
+{
+    std::size_t totalSent = 0;
+
+    while (totalSent < response.size())
+    {
+        ssize_t bytesSent = send(
+            clientSocket,
+            response.c_str() + totalSent,
+            response.size() - totalSent,
+            0
+        );
+
+        if (bytesSent == -1 && errno == EINTR)
+        {
+            continue;
+        }
+
+        if (bytesSent <= 0)
+        {
+            return false;
+        }
+
+        totalSent += static_cast<std::size_t>(bytesSent);
+    }
+
+    return true;
 }
 
 std::string Server::processCommand(const std::string &line, bool &shouldClose)

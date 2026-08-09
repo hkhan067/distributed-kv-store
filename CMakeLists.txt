@@ -5,6 +5,7 @@ project(distributed_kv_store)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Threads REQUIRED)
+find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
 
 include_directories(include)
 
@@ -34,3 +35,13 @@ add_executable(level5_tests
 )
 
 add_test(NAME level5_tests COMMAND level5_tests)
+
+add_test(
+    NAME level6_integration
+    COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/tests/Level6IntegrationTest.py
+        $<TARGET_FILE:kv_server>
+)
+
+set_tests_properties(level6_integration PROPERTIES TIMEOUT 30)
