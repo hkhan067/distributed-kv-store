@@ -43,7 +43,7 @@ The servers do not communicate with one another. This is client-side sharding: e
 - Deterministic 64-bit FNV-1a client-side key sharding
 - Lazy persistent connection reuse for each contacted node
 - Per-shard error reporting without rerouting data incorrectly
-- Single-client and concurrent Python benchmarks
+- Reproducible final-version distributed benchmark suite
 - C++ unit tests and a real three-node Python integration test
 
 ## Quick Start
@@ -223,69 +223,126 @@ The original log is never truncated first. If temporary-file creation or writing
 
 ## Testing
 
-`ctest` runs two test suites:
+`ctest` runs three test suites:
 
 - `level5_tests` checks compaction, recovery equivalence, repeated PUTs, deleted keys, post-compaction writes, empty logs, malformed records, and failure paths that preserve the original log.
 - `level6_integration` launches three real server processes on temporary ports with separate temporary logs. It verifies deterministic hashing, physical shard isolation, fragmented and batched TCP commands, PUT/GET/DELETE routing, cluster-wide compaction, unavailable-shard errors, healthy-shard continuity, and recovery after node and full-cluster restarts.
+- `distributed_benchmark_smoke` runs every final benchmark category with a tiny workload to catch orchestration, validation, and reporting regressions without treating smoke-run numbers as performance results.
 
 Tests never modify `data/kv.log`.
 
-## Benchmarking
+## Final Distributed Benchmarks
 
-### Single-Client Sequential Benchmark
+The final benchmark suite measures the completed Level 6 system rather than an earlier project stage. It launches isolated server processes itself, uses temporary logs, validates every response, and removes all generated data when it finishes.
 
-With one server running on localhost port 8080:
+### Reproduce the Results
+
+Build the optimized server and run the self-contained benchmark from the project root:
 
 ```bash
-python3 scripts/benchmark.py
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+python3 scripts/distributed_benchmark.py
 ```
 
-The script uses one persistent connection and waits for each response before sending the next request.
+The script covers concurrent operation scaling, mixed workloads, node-process scaling, shard distribution, log compaction, and recovery. Command-line options can reduce the workload for a faster smoke run:
 
-#### Historical Level 4 Results
+```bash
+python3 scripts/distributed_benchmark.py --help
+```
 
-These localhost results used 10,000 sequential requests per operation and were recorded before Level 5 added per-write `fsync()`. They are retained as a Level 4 baseline, not presented as current write performance.
+### Methodology
 
-| Operation | Total Time | Throughput | Average Latency |
+Results were collected on August 9, 2026 using an Apple M5 Pro MacBook Pro with 15 CPU cores and 48 GB of memory, running macOS 26.6 and Python 3.9.6.
+
+- C++ server compiled in Release mode with Apple Clang 21.0.0.
+- Primary distributed workloads use three real `kv_server` processes with independent temporary logs; the node-scaling test intentionally varies this from one to three.
+- Localhost TCP transport with one persistent connection per worker per node.
+- Connection setup, fixture creation, log resets, and cleanup excluded from timed intervals.
+- Workers synchronized before timing and every server response checked for correctness.
+- Separate key ranges per worker to avoid accidental cross-client overwrites.
+- Fresh logs before every timed workload trial so old append history cannot bias later rows; recovery trials intentionally restart the same controlled log.
+- Three trials per timed row; each reported metric is the median of those trials.
+- PUT and DELETE include the final Level 5 `flush()` and per-request `fsync()` durability behavior.
+
+These are end-to-end, closed-loop measurements: each worker sends one request and waits for its response before sending its next request.
+
+### Three-Node Concurrent Scaling
+
+Each worker performs 500 requests per operation. PUT first creates the dataset, GET reads the same keys, and DELETE removes them.
+
+| Clients | Operation | Requests | Requests/sec | Avg Latency | P50 | P95 | P99 |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 2 | PUT | 1,000 | 31,191 | 0.064 ms | 0.059 ms | 0.085 ms | 0.130 ms |
+| 2 | GET | 1,000 | 75,144 | 0.026 ms | 0.024 ms | 0.039 ms | 0.055 ms |
+| 2 | DELETE | 1,000 | 30,011 | 0.066 ms | 0.062 ms | 0.089 ms | 0.118 ms |
+| 4 | PUT | 2,000 | 39,691 | 0.100 ms | 0.092 ms | 0.168 ms | 0.228 ms |
+| 4 | GET | 2,000 | 54,979 | 0.072 ms | 0.065 ms | 0.133 ms | 0.177 ms |
+| 4 | DELETE | 2,000 | 41,577 | 0.095 ms | 0.088 ms | 0.154 ms | 0.205 ms |
+| 8 | PUT | 4,000 | 34,421 | 0.230 ms | 0.217 ms | 0.409 ms | 0.531 ms |
+| 8 | GET | 4,000 | 39,070 | 0.202 ms | 0.182 ms | 0.410 ms | 0.554 ms |
+| 8 | DELETE | 4,000 | 34,627 | 0.228 ms | 0.215 ms | 0.412 ms | 0.533 ms |
+| 16 | PUT | 8,000 | 29,994 | 0.526 ms | 0.481 ms | 1.035 ms | 1.365 ms |
+| 16 | GET | 8,000 | 38,541 | 0.408 ms | 0.364 ms | 0.878 ms | 1.165 ms |
+| 16 | DELETE | 8,000 | 30,885 | 0.509 ms | 0.462 ms | 1.001 ms | 1.326 ms |
+
+GET peaked at **75,144 requests/second**. Durable PUT and DELETE throughput peaked around **40,000 requests/second** with four clients. At eight and sixteen clients, throughput levels off while tail latency rises, which is consistent with shared-host load generation, storage synchronization, thread scheduling, and per-node mutex contention.
+
+### Mixed Workloads
+
+Eight concurrent clients each execute 1,000 shuffled operations against three nodes. GET and DELETE fixtures are created before timing.
+
+| Workload | Operation Mix | Requests | Requests/sec | Avg Latency | P50 | P95 | P99 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Read-heavy | 80% GET / 10% PUT / 10% DELETE | 8,000 | 40,569 | 0.195 ms | 0.180 ms | 0.365 ms | 0.467 ms |
+| Balanced | 50% GET / 25% PUT / 25% DELETE | 8,000 | 36,527 | 0.217 ms | 0.198 ms | 0.404 ms | 0.540 ms |
+
+The read-heavy mix is faster because only 20% of its operations require an append, flush, and `fsync()`. The balanced mix performs durable writes for half of its requests.
+
+### Node-Process Scaling
+
+This comparison keeps the workload fixed at eight clients and 8,000 read-heavy operations while changing only the number of active shard processes.
+
+| Nodes | Requests | Requests/sec | Avg Latency | P50 | P95 | P99 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 8,000 | 39,396 | 0.201 ms | 0.186 ms | 0.374 ms | 0.495 ms |
+| 2 | 8,000 | 40,428 | 0.196 ms | 0.181 ms | 0.363 ms | 0.482 ms |
+| 3 | 8,000 | 39,198 | 0.201 ms | 0.182 ms | 0.385 ms | 0.508 ms |
+
+Throughput remains around 39–40K requests/second while all processes, the Python load generator, and all persistence files share one laptop and storage device. The lack of a material gain is consistent with shared-host limits. Sharding distributes ownership and isolates failures, but running more processes on one host does not create additional physical capacity. A multi-machine deployment is required to measure horizontal hardware scaling.
+
+### FNV-1a Shard Balance
+
+The benchmark routes 30,000 deterministic keys through the production FNV-1a routing function without sending network requests.
+
+| Node | Assigned Keys | Share |
+|---:|---:|---:|
+| 0 | 9,972 | 33.24% |
+| 1 | 10,018 | 33.39% |
+| 2 | 10,010 | 33.37% |
+
+The maximum deviation from the ideal 10,000 keys per node is only **0.28%**.
+
+### Compaction and Recovery
+
+To create a controlled persistence history efficiently, the benchmark generates 315,000 records directly in the valid native log format rather than sending 315,000 network writes: 30,000 keys receive ten PUT versions each, then half of the keys are deleted. It verifies live and deleted sample keys before and after compaction.
+
+| Metric | Before Compaction | After Compaction | Improvement |
 |---|---:|---:|---:|
-| PUT | 0.3653 s | 27,378 requests/second | 0.0365 ms |
-| GET | 0.1489 s | 67,179 requests/second | 0.0149 ms |
-| DELETE | 0.3497 s | 28,600 requests/second | 0.0350 ms |
+| Log records | 315,000 | 15,000 | 95.24% reduction |
+| Combined log size | 9.12 MiB | 0.44 MiB | 95.19% reduction |
+| Median cluster-ready recovery | 22.7 ms | 6.0 ms | 73.7% faster |
 
-### Concurrent Benchmark
+One observed end-to-end COMPACT run across all three localhost nodes took **0.003 seconds**. Recovery is measured from process launch until every node accepts TCP connections, using the median of three restarts before and three restarts after compaction with a 1 ms readiness-polling interval.
 
-```bash
-python3 scripts/concurrent_benchmark.py
-```
+### Interpreting the Numbers
 
-The concurrent benchmark creates one Python thread and one persistent connection per simulated client. Clients use separate key ranges, synchronize their start, validate every response, and report aggregate throughput plus average, P50, P95, and P99 latency.
-
-#### Historical Level 4 Concurrent Results
-
-The persistence log was cleared before this suite, and each persistent client sent 10,000 sequential requests per operation. These measurements also predate Level 5 per-write `fsync()`.
-
-| Clients | Operation | Total Requests | Total Time | Throughput | Average Latency | P50 Latency | P95 Latency | P99 Latency |
-|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| 1 | PUT | 10,000 | 0.4227 s | 23,658.03 req/s | 0.0416 ms | 0.0391 ms | 0.0626 ms | 0.0965 ms |
-| 1 | GET | 10,000 | 0.1974 s | 50,659.21 req/s | 0.0190 ms | 0.0187 ms | 0.0247 ms | 0.0301 ms |
-| 1 | DELETE | 10,000 | 0.4011 s | 24,928.54 req/s | 0.0395 ms | 0.0391 ms | 0.0476 ms | 0.0557 ms |
-| 2 | PUT | 20,000 | 0.4706 s | 42,498.05 req/s | 0.0464 ms | 0.0442 ms | 0.0595 ms | 0.0890 ms |
-| 2 | GET | 20,000 | 0.2214 s | 90,336.24 req/s | 0.0215 ms | 0.0205 ms | 0.0289 ms | 0.0388 ms |
-| 2 | DELETE | 20,000 | 0.4703 s | 42,530.57 req/s | 0.0464 ms | 0.0434 ms | 0.0655 ms | 0.1092 ms |
-| 4 | PUT | 40,000 | 0.9290 s | 43,057.56 req/s | 0.0914 ms | 0.0563 ms | 0.2295 ms | 0.3641 ms |
-| 4 | GET | 40,000 | 0.6052 s | 66,097.77 req/s | 0.0595 ms | 0.0533 ms | 0.1122 ms | 0.1580 ms |
-| 4 | DELETE | 40,000 | 1.0401 s | 38,456.22 req/s | 0.1028 ms | 0.0884 ms | 0.2424 ms | 0.3519 ms |
-| 8 | PUT | 80,000 | 1.8297 s | 43,724.03 req/s | 0.1814 ms | 0.0508 ms | 0.5738 ms | 0.9568 ms |
-| 8 | GET | 80,000 | 2.0779 s | 38,500.91 req/s | 0.2063 ms | 0.1887 ms | 0.4020 ms | 0.5336 ms |
-| 8 | DELETE | 80,000 | 1.8163 s | 44,044.44 req/s | 0.1800 ms | 0.1745 ms | 0.4535 ms | 0.7401 ms |
-
-PUT and DELETE scaled from one to multiple clients before leveling off around the single-node mutex and persistence path. Higher client counts increased contention and tail latency. A separate recovery check successfully restored 400 keys written by four concurrent clients.
-
-### Persistence-Log Impact
-
-PUT and DELETE include persistence overhead, while GET performs only an in-memory lookup. Between compactions, obsolete entries grow the log, increasing disk usage and the amount of work required during startup replay. Benchmark comparisons should therefore begin from a consistent log state or record log size.
-
-Compaction reduces log size and recovery work but does not remove the normal append and `fsync()` cost of new writes. Current Level 5 durability behavior should be re-benchmarked before comparing new PUT or DELETE results with the historical Level 4 numbers above.
+- All nodes and benchmark workers run on one machine over loopback, so these are not multi-datacenter or production-network claims.
+- The Python load generator, operating-system cache, scheduler, and shared storage device can limit measured throughput.
+- Recovery measurements include process startup and use warm localhost filesystem caches.
+- Results will vary by CPU, filesystem, storage device, operating system, and background load.
+- The system shards data but does not replicate it, so these results do not measure replication or consensus overhead.
+- The benchmark favors reproducibility and response validation over generating the largest possible headline number.
 
 ## Project Structure
 
@@ -301,8 +358,7 @@ distributed-kv-store/
 │   ├── PersistenceLog.h
 │   └── Server.h
 ├── scripts/
-│   ├── benchmark.py
-│   ├── concurrent_benchmark.py
+│   ├── distributed_benchmark.py
 │   └── sharded_client.py
 ├── src/
 │   ├── CommandParser.cpp
@@ -348,8 +404,7 @@ These are deliberate boundaries that keep the implementation understandable and 
 ### Level 3 — Persistence and Benchmarking (Completed)
 
 - Append-only log and startup recovery
-- Sequential Python benchmark
-- Throughput and latency measurement
+- Initial Python throughput and latency measurement
 
 ### Level 4 — Concurrent Clients (Completed)
 
@@ -381,4 +436,4 @@ These are deliberate boundaries that keep the implementation understandable and 
 - Bounded thread pool and reader-writer locking
 - Batched or configurable durability modes
 - Checksummed or length-prefixed log records
-- Metrics and a multi-node benchmark
+- Multi-host deployment benchmarking
