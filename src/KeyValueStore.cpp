@@ -27,3 +27,8 @@ bool KeyValueStore::remove(const std::string &key)
     }
     return true;
 }
+
+std::unordered_map<std::string, std::string> KeyValueStore::snapshot() const
+{
+    return data;
+}

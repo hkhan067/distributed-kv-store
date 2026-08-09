@@ -8,6 +8,7 @@ enum class CommandType
     Put,
     Get,
     Delete,
+    Compact,
     Invalid,
     Exit
 };

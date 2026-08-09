@@ -26,3 +26,4 @@ cmake_install.cmake
 
 # Logs / data
 data/*.log
+data/*.log.tmp

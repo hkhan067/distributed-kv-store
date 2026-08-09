@@ -23,3 +23,14 @@ add_executable(kv_server
 )
 
 target_link_libraries(kv_server PRIVATE Threads::Threads)
+
+enable_testing()
+
+add_executable(level5_tests
+    tests/Level5Tests.cpp
+    src/KeyValueStore.cpp
+    src/CommandParser.cpp
+    src/PersistenceLog.cpp
+)
+
+add_test(NAME level5_tests COMMAND level5_tests)

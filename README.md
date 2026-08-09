@@ -4,11 +4,11 @@ A C++ key-value store project focused on client-server networking, persistence, 
 
 ## Current Project Status
 
-The project has completed **Level 4**. The local storage engine, TCP networking, persistent client connections, append-only persistence, startup recovery, single-client benchmarking, multithreaded client handling, and concurrent benchmarking are implemented. The next planned level is **Level 5: log compaction and stronger durability**. Multi-node distribution, hash-based sharding, and optional replication are planned for **Level 6** and are not implemented yet.
+The project has completed **Level 5**. It now includes the local storage engine, TCP networking, persistent client connections, multithreaded client handling, append-only persistence, startup recovery, concurrent benchmarking, safe log compaction, and stronger write durability. The next level is **Level 6: multi-node distribution and hash-based sharding**. Distribution and replication are not implemented yet.
 
 The server now accepts multiple simultaneous client connections. Each accepted connection is assigned to a detached client thread, allowing the main server thread to immediately return to accepting more clients. Each client thread keeps its connection open for multiple commands until the client disconnects or sends `EXIT`.
 
-All client threads share one key-value store and one persistence log. A mutex protects GET, PUT, and DELETE operations so concurrent clients cannot corrupt the shared state or produce persistence-log ordering problems. Concurrent response validation and restart recovery checks confirm that multiclient operations remain consistent.
+All client threads share one key-value store and one persistence log. A mutex protects GET, PUT, DELETE, and COMPACT operations so concurrent clients cannot corrupt the shared state or produce persistence-log ordering problems. PUT and DELETE use write-ahead ordering: the durable log record is completed before memory is changed and the server returns `OK`.
 
 ## Current Features
 
@@ -19,6 +19,10 @@ All client threads share one key-value store and one persistence log. A mutex pr
 - Persistent TCP client connections
 - Append-only persistence logging
 - Recovery from the persistence log on server startup
+- Manual log compaction with `COMPACT`
+- Temporary-file compaction and atomic log replacement
+- Write-ahead updates with persistence error reporting
+- `flush()` and POSIX `fsync()` before acknowledging writes
 - Graceful client disconnection with `EXIT`
 - Thread-per-client handling for simultaneous connections
 - Mutex protection for the shared store and persistence log
@@ -26,12 +30,13 @@ All client threads share one key-value store and one persistence log. A mutex pr
 - Python single-client and concurrent benchmarking
 - Average, P50, P95, and P99 latency measurements
 
-## Supported Commands
+## TCP Server Commands
 
 ```txt
 PUT key value
 GET key
 DELETE key
+COMPACT
 EXIT
 ```
 
@@ -46,11 +51,15 @@ DELETE name
 OK
 GET name
 NOT_FOUND
+COMPACT
+OK
 EXIT
 GOODBYE
 ```
 
 `EXIT` closes only the current client connection. It does not stop the server.
+
+`COMPACT` rewrites the persistence log so it contains one PUT record for each key currently in memory. It is an administrative command and does not close the connection.
 
 ## Concurrent Client Handling
 
@@ -61,11 +70,12 @@ Each client thread owns its client socket and closes that socket when the client
 The in-memory store and persistence log are shared by every client thread. A single `std::mutex` coordinates access to these resources:
 
 - GET holds the mutex while reading from the store.
-- PUT holds the mutex while updating the store and appending the matching log entry.
-- DELETE holds the mutex while updating the store and appending the matching log entry.
+- PUT holds the mutex while durably appending its log entry and then updating the store.
+- DELETE holds the mutex while checking the key, durably appending its log entry, and then updating the store.
+- COMPACT holds the mutex while taking a store snapshot and safely replacing the log.
 - Socket reads, command parsing, and response sends happen outside the locked section.
 
-The store mutation and its matching persistence-log append use the same lock so their ordering remains consistent during recovery. CMake uses the portable `Threads::Threads` target to provide the platform-specific thread support required by `kv_server`.
+The store mutation and its matching persistence-log append use the same lock so their ordering remains consistent during recovery. Compaction deliberately uses that same lock until the new log is in place. This pauses other data operations briefly, but prevents a concurrent acknowledged write from disappearing when the compacted file replaces the old file. CMake uses the portable `Threads::Threads` target to provide the platform-specific thread support required by `kv_server`.
 
 ## Persistence Log
 
@@ -78,7 +88,32 @@ PUT name Haroon
 DELETE name
 ```
 
-When the server starts, it replays the persistence log to rebuild the in-memory key-value store. PUT and DELETE operations are written to the log, while GET operations are not logged because they do not modify stored data.
+When the server starts, it replays the persistence log to rebuild the in-memory key-value store. PUT and DELETE operations are written to the log, while GET operations are not logged because they do not modify stored data. Incomplete records are ignored during recovery rather than being applied to the store.
+
+For PUT and DELETE, the server now follows this order:
+
+```txt
+lock shared state
+write and flush the log record
+fsync the log file
+change the in-memory store
+unlock shared state
+return OK
+```
+
+If persistence fails, the server returns `ERROR persistence failure` and does not change the in-memory store. Calling `fsync()` before `OK` gives each successful write stronger protection than stream buffering alone, including across normal process restarts. It also adds disk-synchronization cost to every write, so Level 5 PUT and DELETE performance should be benchmarked separately from the earlier Level 4 results.
+
+### Log Compaction
+
+An append-only log keeps old PUT values and DELETE records forever. `COMPACT` removes those obsolete records with the following safe sequence:
+
+1. Copy the current in-memory key-value state while holding `dataMutex`.
+2. Write one PUT record per live key to `kv.log.tmp`.
+3. Flush, close, and `fsync()` the temporary file.
+4. Atomically rename the temporary file over `kv.log`.
+5. `fsync()` the resulting log before returning `OK`.
+
+The original log is never truncated first. If writing the temporary file fails, the original log remains available for recovery. The straightforward first implementation blocks other store operations during compaction in exchange for an easy-to-explain correctness guarantee.
 
 ## Benchmarking
 
@@ -101,9 +136,9 @@ Run the benchmark from the project root in another terminal:
 python3 scripts/benchmark.py
 ```
 
-#### Sample Benchmark Results
+#### Historical Level 4 Benchmark Results
 
-Measured on localhost using one persistent client connection and 10,000 sequential requests per operation:
+Measured on localhost using one persistent client connection and 10,000 sequential requests per operation. These results were recorded before Level 5 added per-write `fsync()`, so they are retained as a Level 4 baseline rather than presented as current Level 5 write performance.
 
 | Operation | Total Time | Throughput | Average Latency |
 |---|---:|---:|---:|
@@ -127,9 +162,9 @@ Run the concurrent benchmark from the project root:
 python3 scripts/concurrent_benchmark.py
 ```
 
-#### Sample Concurrent Results
+#### Historical Level 4 Concurrent Results
 
-Measured on localhost using 10,000 sequential requests per persistent client connection. The persistence log was cleared before this test suite began, so these results started from an empty log. The log then grew normally as the PUT and DELETE phases ran.
+Measured on localhost using 10,000 sequential requests per persistent client connection. The persistence log was cleared before this test suite began, so these results started from an empty log. The log then grew normally as the PUT and DELETE phases ran. These measurements also predate Level 5 per-write `fsync()`.
 
 | Clients | Operation | Total Requests | Total Time | Throughput | Average Latency | P50 Latency | P95 Latency | P99 Latency |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|
@@ -154,9 +189,9 @@ As a recovery check, four clients concurrently wrote 100 keys each. After the se
 
 The benchmark results include persistence overhead. Every PUT and DELETE opens and appends to the persistence log before returning a response, while GET performs only an in-memory lookup. This is why write operations are slower than reads.
 
-The log does not currently compact, so overwritten and deleted keys leave obsolete entries behind and the file grows after every write benchmark. The growing log most directly increases disk usage and startup recovery time because the server must replay every historical entry. Depending on the filesystem, storage device, and cache state, a large log can also affect sustained write measurements. Benchmark comparisons should therefore record the log size or begin from a consistent log state.
+Between compactions, overwritten and deleted keys still leave obsolete entries behind and the append-only file grows after every write benchmark. The growing log most directly increases disk usage and startup recovery time because the server must replay every historical entry. Depending on the filesystem, storage device, and cache state, a large log can also affect sustained write measurements. Benchmark comparisons should therefore record the log size or begin from a consistent log state.
 
-Level 5 log compaction will rewrite the log to contain only the current key-value state. This should greatly reduce log size and recovery time and make long-running benchmark conditions more consistent. Compaction will not eliminate the normal cost of appending each new PUT or DELETE.
+Level 5 compaction rewrites the log to contain only the current key-value state. This reduces log size and startup recovery work and makes long-running benchmark conditions more consistent. Compaction does not eliminate the normal append and `fsync()` cost of each new PUT or DELETE.
 
 ## Project Structure
 
@@ -174,6 +209,8 @@ distributed-kv-store/
 ├── scripts/
 │   ├── benchmark.py
 │   └── concurrent_benchmark.py
+├── tests/
+│   └── Level5Tests.cpp
 └── src/
     ├── CommandParser.cpp
     ├── KeyValueStore.cpp
@@ -191,6 +228,14 @@ cd build
 cmake ..
 cmake --build .
 ```
+
+Run the automated tests:
+
+```bash
+ctest --output-on-failure
+```
+
+The Level 5 tests use an isolated test log. They cover compaction and recovery, repeated PUTs, deleted keys, writes after compaction, empty-store compaction, malformed records, and failure paths that must preserve the original log.
 
 ## Run
 
@@ -239,15 +284,17 @@ Run the TCP server:
 - Concurrent response validation and recovery testing
 - Multi-client throughput and latency benchmarking
 
-### Level 5 — Compaction and Durability (Next)
+### Level 5 — Compaction and Durability (Completed)
 
 - Log compaction to remove obsolete entries
 - Reduced log size and startup recovery time
 - Safe temporary-file replacement
-- Stronger log-write error handling
-- Explicit flush and durability behavior
+- Atomic rename that preserves the original log on temporary-write failure
+- Write-ahead store updates and persistence error handling
+- Explicit `flush()` and POSIX `fsync()` durability behavior
+- Compaction, recovery, malformed-record, and failure-path tests
 
-### Level 6 — Basic Distribution (Planned)
+### Level 6 — Basic Distribution (Next)
 
 - Multiple key-value server nodes
 - Hash-based key sharding

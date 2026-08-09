@@ -47,6 +47,13 @@ void Server::start()
 
     int listenResult = listen(serverSocket, 10);
 
+    if (listenResult == -1)
+    {
+        std::cout << "ERROR: Failed to listen on socket." << std::endl;
+        close(serverSocket);
+        return;
+    }
+
     std::cout << "KV server listening on port " << port << "..." << std::endl;
 
     while (true)
@@ -77,7 +84,8 @@ void Server::start()
 void Server::handleClient(int clientSocket)
 {
     while (true)
-    {    char buffer[1024];
+    {
+        char buffer[1024];
 
         std::memset(buffer, 0, sizeof(buffer));
 
@@ -117,12 +125,24 @@ std::string Server::processCommand(const std::string &line, bool &shouldClose)
 
     if (command.type == CommandType::Put)
     {
+        bool persisted = false;
+
         {
             std::lock_guard<std::mutex> lock(dataMutex);
 
-            store.put(command.key, command.value);
-            log.appendPut(command.key, command.value);
+            persisted = log.appendPut(command.key, command.value);
+
+            if (persisted)
+            {
+                store.put(command.key, command.value);
+            }
         }
+
+        if (!persisted)
+        {
+            return "ERROR persistence failure\n";
+        }
+
         return "OK\n";
     }
     else if (command.type == CommandType::Get)
@@ -146,23 +166,54 @@ std::string Server::processCommand(const std::string &line, bool &shouldClose)
     }
     else if (command.type == CommandType::Delete)
     {
-        bool removed = false;
+        bool found = false;
+        bool persisted = false;
 
         {
             std::lock_guard<std::mutex> lock(dataMutex);
 
-            removed = store.remove(command.key);
-            log.appendDelete(command.key);
+            std::string value;
+            found = store.get(command.key, value);
+
+            if (found)
+            {
+                persisted = log.appendDelete(command.key);
+
+                if (persisted)
+                {
+                    store.remove(command.key);
+                }
+            }
         }
 
-        if (removed)
+        if (!found)
         {
-            return "OK\n";
+            return "NOT_FOUND\n";
         }
-        else
+
+        if (!persisted)
         {
-        return "NOT_FOUND\n";
+            return "ERROR persistence failure\n";
         }
+
+        return "OK\n";
+    }
+    else if (command.type == CommandType::Compact)
+    {
+        bool compacted = false;
+
+        {
+            std::lock_guard<std::mutex> lock(dataMutex);
+            std::unordered_map<std::string, std::string> entries = store.snapshot();
+            compacted = log.compact(entries);
+        }
+
+        if (!compacted)
+        {
+            return "ERROR compaction failed\n";
+        }
+
+        return "OK\n";
     }
 
     return "ERROR invalid command\n";

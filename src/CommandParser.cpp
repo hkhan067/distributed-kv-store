@@ -40,8 +40,12 @@ Command CommandParser::parse(const std::string &line) const
             return {CommandType::Invalid, "", ""};
         }
         return {CommandType::Delete, key, ""};
-    }   
-    else if(commandText == "EXIT")
+    }
+    else if (commandText == "COMPACT")
+    {
+        return {CommandType::Compact, "", ""};
+    }
+    else if (commandText == "EXIT")
     {
         return {CommandType::Exit, "", ""};
     }
