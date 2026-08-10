@@ -184,7 +184,7 @@ def run_cluster_test(executable: Path) -> None:
     ports = find_free_ports(3)
     nodes = [("127.0.0.1", port) for port in ports]
 
-    with tempfile.TemporaryDirectory(prefix="distributed_kv_level6_") as directory:
+    with tempfile.TemporaryDirectory(prefix="distributed_integration_") as directory:
         servers = [
             TestServer(executable, node, Path(directory) / f"node{index}.log")
             for index, node in enumerate(nodes)

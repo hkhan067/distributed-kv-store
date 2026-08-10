@@ -12,7 +12,7 @@
 
 namespace
 {
-const std::string logPath = "level5_test.log";
+const std::string logPath = "persistence_compaction_tests.log";
 
 void expect(bool condition, const std::string &message)
 {
