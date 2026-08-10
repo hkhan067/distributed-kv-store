@@ -225,8 +225,8 @@ The final benchmark suite measures the completed Level 6 system rather than an e
 Build the optimized server and run the self-contained benchmark from the project root:
 
 ```bash
-cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
 python3 scripts/distributed_benchmark.py
 ```
 
@@ -353,8 +353,8 @@ distributed-kv-store/
 │   ├── kv_server.cpp
 │   └── main.cpp
 └── tests/
-    ├── Level5Tests.cpp
-    └── Level6IntegrationTest.py
+    ├── DistributedIntegrationTest.py
+    └── PersistenceCompactionTests.cpp
 ```
 
 ## Design Boundaries

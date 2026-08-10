@@ -794,7 +794,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--server",
         type=Path,
-        default=Path("build-release/kv_server"),
+        default=Path("build/kv_server"),
         help="Path to the Release kv_server binary.",
     )
     parser.add_argument("--trials", type=int, default=DEFAULT_TRIALS)

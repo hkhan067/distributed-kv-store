@@ -28,7 +28,7 @@ target_link_libraries(kv_server PRIVATE Threads::Threads)
 enable_testing()
 
 add_executable(level5_tests
-    tests/Level5Tests.cpp
+    tests/PersistenceCompactionTests.cpp
     src/KeyValueStore.cpp
     src/CommandParser.cpp
     src/PersistenceLog.cpp
@@ -40,7 +40,7 @@ add_test(
     NAME level6_integration
     COMMAND
         ${Python3_EXECUTABLE}
-        ${CMAKE_SOURCE_DIR}/tests/Level6IntegrationTest.py
+        ${CMAKE_SOURCE_DIR}/tests/DistributedIntegrationTest.py
         $<TARGET_FILE:kv_server>
 )
 
