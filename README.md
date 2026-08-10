@@ -375,37 +375,37 @@ These are deliberate boundaries that keep the implementation understandable and 
 
 ## Development Roadmap
 
-### Level 1 — Local Key-Value Engine (Completed)
+### 1. Local Key-Value Engine
 
 - `std::unordered_map` storage
 - PUT, GET, and DELETE
 - Command parser and local CLI
 
-### Level 2 — TCP Networking (Completed)
+### 2. TCP Networking
 
 - POSIX TCP server
 - Request-response protocol
 - Persistent connections and EXIT
 
-### Level 3 — Persistence and Benchmarking (Completed)
+### 3. Persistence and Benchmarking
 
 - Append-only log and startup recovery
 - Initial Python throughput and latency measurement
 
-### Level 4 — Concurrent Clients (Completed)
+### 4. Concurrent Clients
 
 - Thread-per-client handling
 - Multiple simultaneous persistent clients
 - Mutex-protected shared state and log
 - Concurrent persistent-client validation
 
-### Level 5 — Compaction and Durability (Completed)
+### 5. Compaction and Durability
 
 - Temporary-file compaction with atomic rename
 - Log-before-memory mutation ordering with flush/`fsync()` error handling
 - Compaction, recovery, malformed-record, and pre-replacement failure tests
 
-### Level 6 — Basic Distribution (Completed)
+### 6. Basic Distribution
 
 - Configurable independent server nodes and log paths
 - Deterministic FNV-1a client-side sharding
