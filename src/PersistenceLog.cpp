@@ -9,7 +9,7 @@
 PersistenceLog::PersistenceLog(const std::string &path)
     : filePath(path)
 {
-
+    // Nothing here...
 }
 
 bool PersistenceLog::syncFile(const std::string &path) const
