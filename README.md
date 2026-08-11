@@ -350,8 +350,7 @@ distributed-kv-store/
 │   ├── KeyValueStore.cpp
 │   ├── PersistenceLog.cpp
 │   ├── Server.cpp
-│   ├── kv_server.cpp
-│   └── main.cpp
+│   └── kv_server.cpp
 └── tests/
     ├── DistributedIntegrationTest.py
     └── PersistenceCompactionTests.cpp
@@ -379,7 +378,7 @@ These are deliberate boundaries that keep the implementation understandable and 
 
 - `std::unordered_map` storage
 - PUT, GET, and DELETE
-- Command parser and local CLI
+- Command parser and initial local CLI, later superseded by the TCP server
 
 ### 2. TCP Networking
 

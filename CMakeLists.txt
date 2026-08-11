@@ -9,12 +9,6 @@ find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
 
 include_directories(include)
 
-add_executable(kv_cli
-    src/main.cpp
-    src/KeyValueStore.cpp
-    src/CommandParser.cpp
-)
-
 add_executable(kv_server
     src/kv_server.cpp
     src/Server.cpp
